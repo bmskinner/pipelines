@@ -181,7 +181,7 @@ class DownloadFactory(CommandFactory):
     def make_cmd(self, s):
         ''' get the download command for the given sample
         '''
-        return "/usr/bin/Rscript %ssrc/downloadSRA.R %s %s %s " % (args.basedir, args.basedir, s.getAccession(), s._breed)
+        return "/usr/bin/Rscript %ssrc/downloadSRA.R %s %s '%s' " % (args.basedir, args.basedir, s.getAccession(), s._breed)
 
     def has_output(self, s):
         return s.hasFastqFiles() or s.hasTrimmedReads() or s.hasMappedReads() or s.hasBamFile()
@@ -348,6 +348,7 @@ def read_sample_list():
         for line in f:
             entry = line.strip().split("\t")
             entry = [w.replace('"', '') for w in entry] # replace all quotes
+            entry = [w.replace(' ', '_') for w in entry] # replace all spaces
             if(entry[0]=="breed"): # skip header line
                 continue
             sampleList.append( SraSample(entry[6], entry[0], entry[7], entry[4]) )
