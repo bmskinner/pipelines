@@ -2,7 +2,7 @@
 
 from collections import OrderedDict
 from datetime import datetime
-from joblib import Parallel, delayed
+# from joblib import Parallel, delayed
 from pipeline import Sample, CommandFactory, Pipeline
 import argparse
 import errno
@@ -44,6 +44,9 @@ class SraSample(Sample):
 
     def getFastqFolder(self):
         return (args.basedir+"fastq/"+self._breed+"/")
+
+    def getFastq(self):
+        return (self.getFastqFolder()+self._sra_acc+".fastq.gz")
 
     def getFastqRead1(self):
         return (self.getFastqFolder()+self._sra_acc+"_1.fastq.gz")
@@ -127,14 +130,24 @@ class BwaFactory(CommandFactory):
             The verbosity is set to 0 - no output. Excess verbosity (default 3) causes /tmp/slurmd.log overflow
             Setting -v from 0-2 has no effect on the logging to console - as documentation says, 'This option has not been fully supported throughout BWA'
         '''
-        return (' bwa mem -v 1 -t %s %s "%s" "%s"  ' 
-            % (self.threads(), self._genome, s.getTrimmedRead1(), s.getTrimmedRead2())) #> "%s" removed due to test in sdout() below , s.getMappedReadFile()
+        script_file = s.getMappedReadFolder()+s.getAccession()+".sh"
+        bwa_cmd = ' bwa mem -v 1 -t %s %s "%s" "%s"  ' % (self.threads(), self._genome, s.getTrimmedRead1(), s.getTrimmedRead2()) #> "%s" removed due to test in sdout() below , s.getMappedReadFile()
+
+        commands = []
+        commands.append(bwa_cmd)
+        commands.append("")
+
+        self.write_script(commands, script_file, s)
+        return("sh %s " % script_file)
 
     def has_output(self, s):
         return s.hasMappedReads() or s.hasBamFile()
 
     def has_input(self, s):
         return s.hasTrimmedReads()
+
+    def lock_file(self, s):
+        return s.getMappedReadFolder()+s.getAccession()+"."+self._log_suffix+".lck"
 
     def stdout(self, s):
         ''' WARNING: don't muck about with this sdout redirection.
@@ -159,8 +172,17 @@ class TrimFactory(CommandFactory):
     def make_cmd(self, s):
         ''' get the trim command for the given sample
         '''
-        return (' trim_galore --gzip --paired --fastqc --fastqc_args "--nogroup --extract" --output_dir "%s" "%s" "%s" ' 
-            % (s.getTrimmedReadFolder(), s.getFastqRead1(), s.getFastqRead2()))
+        cmd        = ' trim_galore --gzip --paired --fastqc --fastqc_args "--nogroup --extract" --output_dir "%s" "%s" "%s" ' % (s.getTrimmedReadFolder(), s.getFastqRead1(), s.getFastqRead2())
+        commands   = []
+        commands.append(cmd)
+        commands.append("")
+
+        script_file = s.getTrimmedReadFolder()+s.getAccession()+".sh"
+        self.write_script(commands, script_file, s)
+        return("sh %s " % script_file)
+
+    def lock_file(self, s):
+        return s.getTrimmedReadFolder()+s.getAccession()+"."+self._log_suffix+".lck"
 
     def has_output(self, s):
         return s.hasTrimmedReads() or s.hasMappedReads() or s.hasBamFile()
@@ -181,7 +203,14 @@ class DownloadFactory(CommandFactory):
     def make_cmd(self, s):
         ''' get the download command for the given sample
         '''
-        return "/usr/bin/Rscript %ssrc/downloadSRA.R %s %s '%s' " % (args.basedir, args.basedir, s.getAccession(), s._breed)
+        cmd        = "/usr/bin/Rscript %ssrc/downloadSRA.R %s %s '%s' " % (args.basedir, args.basedir, s.getAccession(), s._breed)
+        commands   = []
+        commands.append(cmd)
+        commands.append("")
+
+        script_file = s.getFastqFolder()+s.getAccession()+".sh"
+        self.write_script(commands, script_file, s)
+        return("sh %s " % script_file)
 
     def has_output(self, s):
         return s.hasFastqFiles() or s.hasTrimmedReads() or s.hasMappedReads() or s.hasBamFile()
@@ -189,13 +218,15 @@ class DownloadFactory(CommandFactory):
     def has_input(self, s):
         return True # default, first step in pipeline
 
+    def lock_file(self, s):
+        return s.getFastqFolder()+s.getAccession()+"."+self._log_suffix+".lck"
+
     def __str__(self):
         return "downloading"
 
 class BamCompressFactory(CommandFactory):
     ''' Generate command line calls to convert SAM files to BAM
     '''
-
     def __init__(self, n_threads=8, memory=40):
         CommandFactory.__init__(self, args.basedir, n_threads, memory, "bam")
 
@@ -219,21 +250,20 @@ class BamCompressFactory(CommandFactory):
         cmd  = "%s | %s" %(filt, sort)
         clean_sam = "rm %s" % s.getMappedReadFile()
 
+        commands = (cmd, clean_sam)
+
         script_file = s.getMappedReadFolder()+s.getAccession()+".sh"
-        with open(script_file, 'a') as f:
-            f.write( "#!/bin/sh\n%s\nrm %s\n%s\n" % ( cmd, script_file, clean_sam )   )
-        f.close()
-        
-        cmd = "sh %s " % script_file
-        return(cmd)
-        # return ('samtools view -@ 2 -bSh -o %s  %s ' 
-        #     % (s.getBamFile(), s.getMappedReadFile()) )
+        self.write_script(commands, script_file, s)
+        return("sh %s " % script_file)
 
     def has_output(self, s):
         return s.hasBamFile()
 
     def has_input(self, s):
         return s.hasMappedReads()
+
+    def lock_file(self, s):
+        return s.getMappedReadFolder()+s.getAccession()+"."+self._log_suffix+".lck"
 
     def stdout(self, s):
         return ""
@@ -267,6 +297,7 @@ class ReadExtractionFactory(CommandFactory):
         sort_bam        = "samtools sort -o %s %s" % (mt_bam_file, mt_temp_bam_file) # sort bam
         index_bam       = "samtools index %s" % (mt_bam_file) # index the bam file
 
+
         # Clean up the temporary files
         clean_tmp       = "rm %s" % mt_temp_file
         clean_header    = "rm %s" % header_file
@@ -274,22 +305,20 @@ class ReadExtractionFactory(CommandFactory):
         clean_bam       = "rm %s" % mt_temp_bam_file
         clean_mt_sam    = "rm %s" % mt_sam_file
 
-        commands = ( filt, save_header, extract_chrs, add_header, convert_to_bam, sort_bam, index_bam, clean_tmp, clean_header, clean_sam, clean_bam, clean_mt_sam )
-
+        commands = (filt, save_header, extract_chrs, add_header, convert_to_bam, sort_bam, index_bam, clean_tmp, clean_header, clean_sam, clean_bam, clean_mt_sam)
 
         script_file = s.getFilteredReadFolder()+s.getAccession()+".sh"
-        with open(script_file, 'a') as f:
-            f.write( "#!/bin/sh\n%s\nrm %s\n" % ( "\n".join(commands), script_file )   )
-        f.close()
-        
-        cmd = "sh %s " % script_file
-        return(cmd)
+        self.write_script(commands, script_file, s)
+        return("sh %s " % script_file)
 
     def has_output(self, s):
         return s.hasFilteredReadFile()
 
     def has_input(self, s):
         return s.hasBamFile()
+
+    def lock_file(self, s):
+        return s.getFilteredReadFolder()+s.getAccession()+"."+self._log_suffix+".lck"
 
     def stdout(self, s):
         ''' Override otherwise the output will go to the log.

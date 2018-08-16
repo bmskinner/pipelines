@@ -52,6 +52,43 @@ class CommandFactory:
         self._memory     = memory       # memory required per instance
         self._log_suffix = suffix   # suffix of the sample log file (e.g. sample_name.suffix.log)
 
+    def write_script(self, commands, script_file, s):
+        ''' Write the given list of commands to a shell script.
+
+            Includes commands to create a lock file for the current factory and sample.
+            The lock file and the script itself are deleted once execution is complete
+        '''
+        with open(script_file, 'w') as f:
+            f.write( "#!/bin/sh\ntouch '%s'\n%s\nrm '%s'\nrm %s\n" % ( self.lock_file(s), "\n".join(commands), self.lock_file(s), script_file )   )
+        f.close()
+
+    def has_output(self, s):
+        ''' Does the output for the sample already exist?
+
+            This must be overridden by subclasses.
+        '''
+        return False
+
+    def has_input(self, s):
+        ''' Does the input for the sample already exist?
+
+            This must be overridden by subclasses.
+        '''
+        return False
+
+    def lock_file(self, s):
+        ''' Define the lock file for a sample.
+
+            This must be overridden by subclasses.
+        '''
+        return ""
+
+    def has_lockfile(self, s):
+        ''' Is there a lock file for the sample, indicating leftover from an
+            interrupted analysis?
+        '''
+        return os.path.isfile(self.lock_file(s))
+
     def make_cmd(self, s):
         ''' get the run command for the given sample
 
@@ -243,12 +280,14 @@ class AbstractParallelMethod():
         '''
         logger = logging.getLogger(__name__)
         try:
-            if(runner.has_output(s)):
+            if(runner.has_output(s) and not runner.has_lockfile(s)):
                 logger.debug("Output files of %s exists for %s, skipping" % (str(runner), s.name()))
                 return
             if(not runner.has_input(s)):
                 logger.debug("Missing input files of %s for %s, skipping" % (str(runner), s.name()))
                 return
+            if(runner.has_lockfile(s)):
+                logger.debug("Lock file of %s exists for %s, repeating" % (str(runner), s.name()))
 
             start = time.time()
             sdout_str = (", directing sdout to %s" % runner.stdout(s)) if runner.stdout(s) else ""
