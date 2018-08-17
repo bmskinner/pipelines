@@ -59,7 +59,7 @@ class CommandFactory:
             The lock file and the script itself are deleted once execution is complete
         '''
         with open(script_file, 'w') as f:
-            f.write( "#!/bin/sh\ntouch '%s'\n%s\nrm '%s'\nrm %s\n" % ( self.lock_file(s), "\n".join(commands), self.lock_file(s), script_file )   )
+            f.write( "#!/bin/sh\ntouch '%s'\n%s\nrm '%s'\nrm '%s'\n" % ( self.lock_file(s), "\n".join(commands), self.lock_file(s), script_file )   )
         f.close()
 
     def has_output(self, s):
